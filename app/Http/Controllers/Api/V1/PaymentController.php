@@ -4,8 +4,10 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Enums\PaymentStatus;
 use App\Exceptions\BankRequestException;
+use App\Exceptions\InvalidPaymentTransitionException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\AuthorizePaymentRequest;
+use App\Http\Resources\PaymentResource;
 use App\Models\Payment as PaymentModel;
 use App\Services\Payments\Payment;
 use Illuminate\Http\JsonResponse;
@@ -27,10 +29,7 @@ class PaymentController extends Controller
                 'amount' => $payload['amount'],
             ], Str::uuid());
         } catch (BankRequestException $exception) {
-            return response()->json([
-                'message' => $exception->getMessage(),
-                'error' => $exception->errorCode,
-            ], $this->statusFromBankException($exception));
+            return $this->bankErrorResponse($exception);
         }
 
         $payment = new PaymentModel([
@@ -46,24 +45,113 @@ class PaymentController extends Controller
 
         return response()->json([
             'message' => 'Payment authorized successfully',
-            'data' => [
-                'id' => $payment->id,
-                'order_id' => $payment->order_id,
-                'customer_id' => $payment->customer_id,
-                'amount' => $payment->amount,
-                'currency' => $payment->currency,
-                'status' => $payment->status->value,
-                'authorized_at' => $payment->authorized_at,
-            ],
+            'data' => new PaymentResource($payment),
         ], 201);
     }
 
-    protected function statusFromBankException(BankRequestException $exception): int
+    public function capture(PaymentModel $payment): JsonResponse
     {
-        if ($exception->status >= 500 || $exception->status === 0) {
-            return 502;
+        if (! $payment->canTransitionTo(PaymentStatus::CAPTURED)) {
+            return $this->invalidTransitionResponse($payment, PaymentStatus::CAPTURED);
         }
 
-        return $exception->status;
+        $paymentObj = new Payment(config('services.bank.provider'));
+
+        try {
+            $bankCapture = $paymentObj->capture([
+                'authorization_id' => $payment->bank_authorization_id,
+                'amount' => $payment->amount,
+            ], Str::uuid());
+        } catch (BankRequestException $exception) {
+            return $this->bankErrorResponse($exception);
+        }
+
+        $payment->bank_capture_id = $bankCapture['capture_id'];
+        $payment->transitionTo(PaymentStatus::CAPTURED);
+        $payment->save();
+
+        return response()->json([
+            'message' => 'Payment captured successfully',
+            'data' => new PaymentResource($payment),
+        ]);
+    }
+
+    public function void(PaymentModel $payment): JsonResponse
+    {
+        if (! $payment->canTransitionTo(PaymentStatus::VOIDED)) {
+            return $this->invalidTransitionResponse($payment, PaymentStatus::VOIDED);
+        }
+
+        $paymentObj = new Payment(config('services.bank.provider'));
+
+        try {
+            $bankVoid = $paymentObj->void([
+                'authorization_id' => $payment->bank_authorization_id,
+            ], Str::uuid());
+        } catch (BankRequestException $exception) {
+            return $this->bankErrorResponse($exception);
+        }
+
+        $payment->bank_void_id = $bankVoid['void_id'];
+        $payment->transitionTo(PaymentStatus::VOIDED);
+        $payment->save();
+
+        return response()->json([
+            'message' => 'Payment voided successfully',
+            'data' => new PaymentResource($payment),
+        ]);
+    }
+
+    public function refund(PaymentModel $payment): JsonResponse
+    {
+        if (! $payment->canTransitionTo(PaymentStatus::REFUNDED)) {
+            return $this->invalidTransitionResponse($payment, PaymentStatus::REFUNDED);
+        }
+
+        $paymentObj = new Payment(config('services.bank.provider'));
+
+        try {
+            $bankRefund = $paymentObj->refund([
+                'capture_id' => $payment->bank_capture_id,
+                'amount' => $payment->amount,
+            ], Str::uuid());
+        } catch (BankRequestException $exception) {
+            return $this->bankErrorResponse($exception);
+        }
+
+        $payment->bank_refund_id = $bankRefund['refund_id'];
+        $payment->transitionTo(PaymentStatus::REFUNDED);
+        $payment->save();
+
+        return response()->json([
+            'message' => 'Payment refunded successfully',
+            'data' => new PaymentResource($payment),
+        ]);
+    }
+
+    protected function bankErrorResponse(BankRequestException $exception): JsonResponse
+    {
+        $status = $exception->status >= 500 || $exception->status === 0
+            ? 502
+            : $exception->status;
+
+        return response()->json([
+            'message' => $exception->getMessage(),
+            'error' => $exception->errorCode,
+        ], $status);
+    }
+
+    protected function invalidTransitionResponse(PaymentModel $payment, PaymentStatus $to): JsonResponse
+    {
+        $exception = new InvalidPaymentTransitionException($payment->status, $to);
+
+        return response()->json([
+            'message' => $exception->getMessage(),
+            'error' => 'invalid_transition',
+            'data' => [
+                'id' => $payment->id,
+                'status' => $payment->status->value,
+            ],
+        ], 409);
     }
 }

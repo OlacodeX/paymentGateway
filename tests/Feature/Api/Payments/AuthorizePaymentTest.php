@@ -34,7 +34,7 @@ it('authorizes a payment against the bank', function () {
         ->assertJsonPath('data.order_id', 'ord_100')
         ->assertJsonPath('data.customer_id', 'cus_200')
         ->assertJsonPath('data.amount', 5000)
-        ->assertJsonPath('data.status', PaymentStatus::AUTHORIZED->value);
+        ->assertJsonPath('data.status.value', PaymentStatus::AUTHORIZED->value);
 
     $payment = Payment::query()->where('order_id', 'ord_100')->first();
 
