@@ -1,0 +1,75 @@
+<?php
+
+use App\Enums\PaymentStatus;
+use App\Models\Payment;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
+ 
+uses(RefreshDatabase::class);
+
+it('authorizes a payment against the bank', function () {
+    Http::fake([
+        '*/api/v1/authorizations' => Http::response([
+            'authorization_id' => 'auth_550e8400-e29b-41d4-a716-446655440000',
+            'status' => 'approved',
+            'amount' => 5000,
+            'currency' => 'USD',
+            'expires_at' => now()->addDays(7)->toISOString(),
+            'created_at' => now()->toISOString(),
+        ], 200),
+    ]);
+
+    $response = $this->postJson('/api/v1/payments/authorize', [
+        'order_id' => 'ord_100',
+        'customer_id' => 'cus_200',
+        'amount' => 5000,
+        'card_number' => '4111111111111111',
+        'cvv' => '123',
+        'expiry_month' => 12,
+        'expiry_year' => 2030,
+    ]);
+
+    $response->assertCreated()
+        ->assertJsonPath('message', 'Payment authorized successfully')
+        ->assertJsonPath('data.order_id', 'ord_100')
+        ->assertJsonPath('data.customer_id', 'cus_200')
+        ->assertJsonPath('data.amount', 5000)
+        ->assertJsonPath('data.status', PaymentStatus::AUTHORIZED->value);
+
+    $payment = Payment::query()->where('order_id', 'ord_100')->first();
+
+    expect($payment)->not->toBeNull()
+        ->and($payment->status)->toBe(PaymentStatus::AUTHORIZED)
+        ->and($payment->bank_authorization_id)->toBe('auth_550e8400-e29b-41d4-a716-446655440000')
+        ->and($payment->authorized_at)->not->toBeNull();
+});
+
+it('returns the bank error when authorization is declined', function () {
+    Http::fake([
+        '*/api/v1/authorizations' => Http::response([
+            'error' => 'insufficient_funds',
+            'message' => 'Available balance is less than requested amount',
+        ], 402),
+    ]);
+
+    $response = $this->postJson('/api/v1/payments/authorize', [
+        'order_id' => 'ord_101',
+        'customer_id' => 'cus_201',
+        'amount' => 5000,
+        'card_number' => '5555555555554444',
+        'cvv' => '789',
+        'expiry_month' => 9,
+        'expiry_year' => 2030,
+    ]);
+
+    $response->assertStatus(402)
+        ->assertJsonPath('error', 'insufficient_funds');
+
+    expect(Payment::where('order_id', 'ord_101')->exists())->toBeFalse();
+});
+
+it('returns 422 when the payload is invalid', function () {
+    $this->postJson('/api/v1/payments/authorize', [])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['order_id', 'customer_id', 'amount', 'card_number', 'cvv', 'expiry_month', 'expiry_year']);
+});

@@ -12,11 +12,9 @@ class Payment
 {
     protected Provider $providerInstance;
 
-    public function __construct(?string $provider = null)
+    public function __construct(string $provider)
     {
-        $this->providerInstance = $this->createProvider(
-            $provider ?? config('services.bank.provider', 'mock_bank')
-        );
+        $this->providerInstance = $this->createProvider($provider);
     }
 
     protected function createProvider(string $name): Provider
