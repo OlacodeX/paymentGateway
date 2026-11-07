@@ -35,4 +35,13 @@ return [
         ],
     ],
 
+    'bank' => [
+        'provider' => env('BANK_PROVIDER', 'mock_bank'),
+        'base_url' => env('BANK_BASE_URL', 'http://localhost:8787'),
+        'connect_timeout' => (int) env('BANK_CONNECT_TIMEOUT', 3),
+        'timeout' => (int) env('BANK_TIMEOUT', 15),
+        'retry_times' => (int) env('BANK_RETRY_TIMES', 3),
+        'retry_sleep_ms' => (int) env('BANK_RETRY_SLEEP_MS', 200),
+    ],
+
 ];
