@@ -22,7 +22,7 @@ On authorize recovery, the receipt is found or created by `bank_authorization_id
 
 ## What I'd do differently
 
-Three gaps I’d close first if this left a portfolio exercise.
+Gaps I’d close first if this left a portfolio exercise.
 
 **Idempotency contract.** DB Unique on `(key, method, path)` lets the same key mean two different operations. I’d unique on the key (per merchant), store the request body hash, and return `409` when the body doesn’t match—closer to Stripe/Brandur and safer against client bugs.
 
