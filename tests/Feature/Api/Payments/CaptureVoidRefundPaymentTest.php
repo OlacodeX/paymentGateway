@@ -120,3 +120,95 @@ it('returns 409 when voiding a captured payment', function () {
 
     expect($payment->fresh()->status)->toBe(PaymentStatus::CAPTURED);
 });
+
+it('returns 409 when refunding an authorized payment', function () {
+    $payment = fakeAuthorizedPayment();
+
+    $this->postJson("/api/v1/payments/{$payment->id}/refund", [], [
+        'Idempotency-Key' => 'idem_refund_authorized_'.$payment->id,
+    ])
+        ->assertStatus(409)
+        ->assertJsonPath('error', 'invalid_transition');
+
+    expect($payment->fresh()->status)->toBe(PaymentStatus::AUTHORIZED);
+});
+
+it('returns the bank error when capture is declined', function () {
+    $payment = fakeAuthorizedPayment();
+
+    Http::fake([
+        '*/api/v1/captures' => Http::response([
+            'error' => 'authorization_expired',
+            'message' => 'Authorization is no longer capturable',
+        ], 409),
+    ]);
+
+    $this->postJson("/api/v1/payments/{$payment->id}/capture", [], [
+        'Idempotency-Key' => 'idem_capture_declined_'.$payment->id,
+    ])
+        ->assertStatus(409)
+        ->assertJsonPath('error', 'authorization_expired');
+
+    expect($payment->fresh()->status)->toBe(PaymentStatus::AUTHORIZED);
+});
+
+it('returns the bank error when void is declined', function () {
+    $payment = fakeAuthorizedPayment();
+
+    Http::fake([
+        '*/api/v1/voids' => Http::response([
+            'error' => 'already_captured',
+            'message' => 'Authorization has already been captured',
+        ], 409),
+    ]);
+
+    $this->postJson("/api/v1/payments/{$payment->id}/void", [], [
+        'Idempotency-Key' => 'idem_void_declined_'.$payment->id,
+    ])
+        ->assertStatus(409)
+        ->assertJsonPath('error', 'already_captured');
+
+    expect($payment->fresh()->status)->toBe(PaymentStatus::AUTHORIZED);
+});
+
+it('returns the bank error when refund is declined', function () {
+    $payment = Payment::factory()->captured()->create([
+        'amount' => 5000,
+        'bank_authorization_id' => 'auth_550e8400-e29b-41d4-a716-446655440000',
+        'bank_capture_id' => 'cap_550e8400-e29b-41d4-a716-446655440001',
+    ]);
+
+    Http::fake([
+        '*/api/v1/refunds' => Http::response([
+            'error' => 'refund_not_allowed',
+            'message' => 'Capture cannot be refunded',
+        ], 422),
+    ]);
+
+    $this->postJson("/api/v1/payments/{$payment->id}/refund", [], [
+        'Idempotency-Key' => 'idem_refund_declined_'.$payment->id,
+    ])
+        ->assertStatus(422)
+        ->assertJsonPath('error', 'refund_not_allowed');
+
+    expect($payment->fresh()->status)->toBe(PaymentStatus::CAPTURED);
+});
+
+it('returns the existing capture when the payment is already captured', function () {
+    $payment = Payment::factory()->captured()->create([
+        'amount' => 5000,
+        'bank_authorization_id' => 'auth_550e8400-e29b-41d4-a716-446655440000',
+        'bank_capture_id' => 'cap_550e8400-e29b-41d4-a716-446655440001',
+    ]);
+
+    Http::fake();
+
+    $this->postJson("/api/v1/payments/{$payment->id}/capture", [], [
+        'Idempotency-Key' => 'idem_capture_already_'.$payment->id,
+    ])
+        ->assertOk()
+        ->assertJsonPath('data.id', $payment->id) 
+        ->assertJsonPath('data.status.value', PaymentStatus::CAPTURED->value);
+
+    Http::assertNothingSent();
+});

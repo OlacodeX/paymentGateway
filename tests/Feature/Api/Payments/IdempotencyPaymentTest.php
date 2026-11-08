@@ -133,6 +133,39 @@ it('recovers a started authorize when the bank succeeded but the receipt was mis
         ->and(IdempotencyKey::where('idempotency_key', 'idem_recover_authorize')->first()->isFinished())->toBeTrue();
 });
 
+it('replays a refund response without calling the bank again', function () {
+    $payment = Payment::factory()->captured()->create([
+        'amount' => 5000,
+        'bank_authorization_id' => 'auth_550e8400-e29b-41d4-a716-446655440000',
+        'bank_capture_id' => 'cap_550e8400-e29b-41d4-a716-446655440001',
+    ]);
+
+    Http::fake([
+        '*/api/v1/refunds' => Http::response([
+            'refund_id' => 'ref_550e8400-e29b-41d4-a716-446655440003',
+            'capture_id' => $payment->bank_capture_id,
+            'status' => 'refunded',
+            'amount' => 5000,
+            'currency' => 'USD',
+            'refunded_at' => now()->toISOString(),
+        ], 200),
+    ]);
+
+    $headers = [
+        'Idempotency-Key' => 'idem_replay_refund_'.$payment->id,
+    ];
+
+    $this->postJson("/api/v1/payments/{$payment->id}/refund", [], $headers)
+        ->assertOk();
+
+    $this->postJson("/api/v1/payments/{$payment->id}/refund", [], $headers)
+        ->assertOk()
+        ->assertHeader('X-Idempotent-Replayed', 'true')
+        ->assertJsonPath('data.status.value', PaymentStatus::REFUNDED->value);
+
+    Http::assertSentCount(1);
+});
+
 it('does not duplicate a receipt when recovering an authorize that already saved', function () {
     IdempotencyKey::create([
         'idempotency_key' => 'idem_recover_existing',

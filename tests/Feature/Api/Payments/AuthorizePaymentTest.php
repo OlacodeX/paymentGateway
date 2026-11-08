@@ -38,7 +38,7 @@ it('authorizes a payment against the bank', function () {
         ->assertJsonPath('data.amount', 5000)
         ->assertJsonPath('data.status.value', PaymentStatus::AUTHORIZED->value);
 
-    $payment = Payment::query()->where('order_id', 'ord_100')->first();
+    $payment = Payment::where('order_id', 'ord_100')->first();
 
     expect($payment)->not->toBeNull()
         ->and($payment->status)->toBe(PaymentStatus::AUTHORIZED)
@@ -46,6 +46,36 @@ it('authorizes a payment against the bank', function () {
         ->and($payment->authorized_at)->not->toBeNull();
 
     Http::assertSent(fn ($request) => $request->hasHeader('Idempotency-Key', 'idem_authorize_ord_100'));
+});
+
+it('returns 502 when the bank responds with a server error', function () {
+    config([
+        'services.bank.retry_times' => 1,
+        'services.bank.retry_sleep_ms' => 0,
+    ]);
+
+    Http::fake([
+        '*/api/v1/authorizations' => Http::response([
+            'error' => 'internal_error',
+            'message' => 'Bank unavailable',
+        ], 500),
+    ]);
+
+    $this->postJson('/api/v1/payments/authorize', [
+        'order_id' => 'ord_502',
+        'customer_id' => 'cus_502',
+        'amount' => 5000,
+        'card_number' => '4111111111111111',
+        'cvv' => '123',
+        'expiry_month' => 12,
+        'expiry_year' => 2030,
+    ], [
+        'Idempotency-Key' => 'idem_authorize_ord_502',
+    ])
+        ->assertStatus(502)
+        ->assertJsonPath('error', 'internal_error');
+
+    expect(Payment::where('order_id', 'ord_502')->exists())->toBeFalse();
 });
 
 it('returns the bank error when authorization is declined', function () {
