@@ -29,30 +29,34 @@ class EnsureIdempotency
             'request_path' => $request->path(),
         ])->first();
 
-        if ($existing !== null) {
-            return $existing->isFinished()
-                ? $this->replayResponse($existing)
-                : $this->inProgressResponse();
+        if ($existing !== null && $existing->isFinished()) {
+            return $this->replayResponse($existing);
         }
 
-        try {
-            $record = IdempotencyKey::create([
-                'idempotency_key' => $key,
-                'request_method' => $request->method(),
-                'request_path' => $request->path(),
-                'recovery_point' => IdempotencyRecoveryPoint::STARTED,
-                'locked_at' => now(),
-            ]);
-        } catch (UniqueConstraintViolationException) {
-            $existing = IdempotencyKey::where([
-                'idempotency_key' => $key,
-                'request_method' => $request->method(),
-                'request_path' => $request->path(),
-            ])->first();
+        if ($existing !== null) {
+            $record = $existing;
+        } else {
+            try {
+                $record = IdempotencyKey::create([
+                    'idempotency_key' => $key,
+                    'request_method' => $request->method(),
+                    'request_path' => $request->path(),
+                    'recovery_point' => IdempotencyRecoveryPoint::STARTED,
+                    'locked_at' => now(),
+                ]);
+            } catch (UniqueConstraintViolationException) {
+                $existing = IdempotencyKey::where([
+                    'idempotency_key' => $key,
+                    'request_method' => $request->method(),
+                    'request_path' => $request->path(),
+                ])->first();
 
-            return $existing->isFinished()
-                ? $this->replayResponse($existing)
-                : $this->inProgressResponse();
+                if ($existing->isFinished()) {
+                    return $this->replayResponse($existing);
+                }
+
+                $record = $existing;
+            }
         }
 
         //proccess the request
@@ -71,15 +75,6 @@ class EnsureIdempotency
 
     protected function replayResponse(IdempotencyKey $record): JsonResponse
     {
-        return response()->json($record->response_body, $record->response_code)
-            ->header('X-Idempotent-Replayed', 'true');
-    }
-
-    protected function inProgressResponse(): JsonResponse
-    {
-        return response()->json([
-            'message' => 'A request with this Idempotency-Key is already in progress.',
-            'error' => 'idempotency_key_in_progress',
-        ], 409);
+        return response()->json($record->response_body, $record->response_code)->header('X-Idempotent-Replayed', 'true');
     }
 }

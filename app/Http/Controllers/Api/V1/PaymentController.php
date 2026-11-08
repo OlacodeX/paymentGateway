@@ -10,6 +10,7 @@ use App\Http\Requests\AuthorizePaymentRequest;
 use App\Http\Resources\PaymentResource;
 use App\Models\Payment as PaymentModel;
 use App\Services\Payments\Payment;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -32,16 +33,20 @@ class PaymentController extends Controller
             return $this->bankErrorResponse($exception);
         }
 
-        $payment = new PaymentModel([
-            'order_id' => $payload['order_id'],
-            'customer_id' => $payload['customer_id'],
-            'amount' => $payload['amount'],
-            'currency' => $payload['currency'] ?? 'USD',
-            'card_last_four' => substr($payload['card_number'], -4),
-            'bank_authorization_id' => $bankAuthorization['authorization_id'],
-        ]);
-        $payment->transitionTo(PaymentStatus::AUTHORIZED);
-        $payment->save();
+        try {
+            $payment = PaymentModel::where('bank_authorization_id', $bankAuthorization['authorization_id'])->firstOrFail();
+        } catch (ModelNotFoundException) {
+            $payment = new PaymentModel([
+                'order_id' => $payload['order_id'],
+                'customer_id' => $payload['customer_id'],
+                'amount' => $payload['amount'],
+                'currency' => $payload['currency'] ?? 'USD',
+                'card_last_four' => substr($payload['card_number'], -4),
+                'bank_authorization_id' => $bankAuthorization['authorization_id'],
+            ]);
+            $payment->transitionTo(PaymentStatus::AUTHORIZED);
+            $payment->save();
+        }
 
         return response()->json([
             'message' => 'Payment authorized successfully',
@@ -51,6 +56,13 @@ class PaymentController extends Controller
 
     public function capture(Request $request, PaymentModel $payment): JsonResponse
     {
+        if ($payment->status === PaymentStatus::CAPTURED) {
+            return response()->json([
+                'message' => 'Payment captured successfully',
+                'data' => new PaymentResource($payment),
+            ]);
+        }
+
         if (! $payment->canTransitionTo(PaymentStatus::CAPTURED)) {
             return $this->invalidTransitionResponse($payment, PaymentStatus::CAPTURED);
         }
@@ -78,6 +90,13 @@ class PaymentController extends Controller
 
     public function void(Request $request, PaymentModel $payment): JsonResponse
     {
+        if ($payment->status === PaymentStatus::VOIDED) {
+            return response()->json([
+                'message' => 'Payment voided successfully',
+                'data' => new PaymentResource($payment),
+            ]);
+        }
+
         if (! $payment->canTransitionTo(PaymentStatus::VOIDED)) {
             return $this->invalidTransitionResponse($payment, PaymentStatus::VOIDED);
         }
@@ -104,6 +123,13 @@ class PaymentController extends Controller
 
     public function refund(Request $request, PaymentModel $payment): JsonResponse
     {
+        if ($payment->status === PaymentStatus::REFUNDED) {
+            return response()->json([
+                'message' => 'Payment refunded successfully',
+                'data' => new PaymentResource($payment),
+            ]);
+        }
+
         if (! $payment->canTransitionTo(PaymentStatus::REFUNDED)) {
             return $this->invalidTransitionResponse($payment, PaymentStatus::REFUNDED);
         }
@@ -126,6 +152,33 @@ class PaymentController extends Controller
         return response()->json([
             'message' => 'Payment refunded successfully',
             'data' => new PaymentResource($payment),
+        ]);
+    }
+
+    public function byOrder(string $orderId): JsonResponse
+    {
+        try {
+            $payment = PaymentModel::where('order_id', $orderId)->firstOrFail();
+        } catch (ModelNotFoundException) {
+            return response()->json([
+                'message' => 'No payment found for this order.',
+                'error' => 'payment_not_found',
+            ], 404);
+        }
+
+        return response()->json([
+            'message' => 'Payment retrieved successfully',
+            'data' => new PaymentResource($payment),
+        ]);
+    }
+
+    public function byCustomer(string $customerId): JsonResponse
+    {
+        $payments = PaymentModel::where('customer_id', $customerId)->latest()->get();
+
+        return response()->json([
+            'message' => 'Payments retrieved successfully',
+            'data' => PaymentResource::collection($payments),
         ]);
     }
 

@@ -6,6 +6,9 @@ use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function () {
     Route::controller(PaymentController::class)->prefix('payments')->name('payments.')->group(function () {
+        Route::get('by-order/{orderId}', 'byOrder')->name('by-order');
+        Route::get('by-customer/{customerId}', 'byCustomer')->name('by-customer');
+
         Route::middleware(EnsureIdempotency::class)->group(function () {
             Route::post('authorize', 'authorizePayment')->name('authorize');
             Route::post('{payment}/capture', 'capture')->name('capture');
