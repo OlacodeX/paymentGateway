@@ -1,58 +1,109 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# FicMart Payment Gateway
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Laravel payment gateway for [FicMart](https://github.com/benx421/payment-gateway): authorize, capture, void, and refund against the mock bank on `:8787`. The gateway owns payment receipts as source of truth, enforces the payment state machine, and applies idempotency on mutating APIs.
 
-## About Laravel
+## Requirements
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+- PHP 8.3+
+- Composer
+- Mock bank API on `http://localhost:8787` (from the challenge repo)
+- SQLite by default (or any DB Laravel supports)
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
-
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
-
-## Learning Laravel
-
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
-
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
-
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
-
-## Agentic Development
-
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+## Setup
 
 ```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+composer install
+cp .env.example .env
+php artisan key:generate
+php artisan migrate
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+Bank settings in `.env`:
 
-## Contributing
+```env
+BANK_PROVIDER=mock_bank
+BANK_BASE_URL=http://localhost:8787
+BANK_CONNECT_TIMEOUT=3
+BANK_TIMEOUT=15
+BANK_RETRY_TIMES=3
+BANK_RETRY_SLEEP_MS=200
+```
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+Start the app (example):
 
-## Code of Conduct
+```bash
+php artisan serve
+```
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+API base: `http://localhost:8000/api/v1`
 
-## Security Vulnerabilities
+## Mock bank
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+Run the challenge mock bank separately so it listens on port **8787**. See the [payment-gateway](https://github.com/benx421/payment-gateway) bank / docker instructions.
 
-## License
+Happy-path test card: `4111111111111111` / CVV `123` / expiry `12/2030`.
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+## API
+
+All mutating `POST` routes require an `Idempotency-Key` header. Replays return the stored response with `X-Idempotent-Replayed: true`.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/api/v1/payments/authorize` | Authorize (reserve funds) |
+| `POST` | `/api/v1/payments/{payment}/capture` | Capture |
+| `POST` | `/api/v1/payments/{payment}/void` | Void authorization |
+| `POST` | `/api/v1/payments/{payment}/refund` | Refund capture |
+| `GET` | `/api/v1/payments/by-order/{orderId}` | Receipt by order |
+| `GET` | `/api/v1/payments/by-customer/{customerId}` | Payment history for a customer |
+
+### Authorize example
+
+```bash
+curl -X POST http://localhost:8000/api/v1/payments/authorize \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{
+    "order_id": "ord_100",
+    "customer_id": "cus_200",
+    "amount": 5000,
+    "card_number": "4111111111111111",
+    "cvv": "123",
+    "expiry_month": 12,
+    "expiry_year": 2030
+  }'
+```
+
+Amounts are integer **cents**. Currency defaults to `USD`.
+
+### State machine
+
+```text
+PENDING → AUTHORIZED → CAPTURED → REFUNDED
+              ↓
+           VOIDED
+```
+
+Illegal transitions return `409` with `error: invalid_transition`. Upstream bank failures map to the bank status, or `502` for bank 5xx / connection errors after retries.
+
+## Architecture (short)
+
+| Concern | Location |
+|---------|----------|
+| HTTP API | `app/Http/Controllers/Api/V1/PaymentController.php` |
+| Validation | `app/Http/Requests/AuthorizePaymentRequest.php` |
+| API shape | `app/Http/Resources/PaymentResource.php` |
+| Gateway idempotency | `app/Http/Middleware/EnsureIdempotency.php` + `IdempotencyKey` |
+| Payment state | `app/Traits/HasPaymentState.php` + `PaymentStatus` |
+| Bank client | `app/Services/Payments/` (`Payment` + `MockBankProvider`) |
+| Receipts | `payments` table / `App\Models\Payment` |
+
+## Tests
+
+```bash
+php artisan test --compact tests/Feature/Api/Payments
+php artisan test --compact tests/Unit/Requests
+```
+
+## Tradeoffs
+
+See [TRADEOFFS.md](TRADEOFFS.md).
