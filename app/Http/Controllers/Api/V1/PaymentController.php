@@ -11,7 +11,7 @@ use App\Http\Resources\PaymentResource;
 use App\Models\Payment as PaymentModel;
 use App\Services\Payments\Payment;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Str;
+use Illuminate\Http\Request;
 
 class PaymentController extends Controller
 {
@@ -27,7 +27,7 @@ class PaymentController extends Controller
                 'expiry_month' => $payload['expiry_month'],
                 'expiry_year' => $payload['expiry_year'],
                 'amount' => $payload['amount'],
-            ], Str::uuid());
+            ], $request->header('Idempotency-Key'));
         } catch (BankRequestException $exception) {
             return $this->bankErrorResponse($exception);
         }
@@ -49,7 +49,7 @@ class PaymentController extends Controller
         ], 201);
     }
 
-    public function capture(PaymentModel $payment): JsonResponse
+    public function capture(Request $request, PaymentModel $payment): JsonResponse
     {
         if (! $payment->canTransitionTo(PaymentStatus::CAPTURED)) {
             return $this->invalidTransitionResponse($payment, PaymentStatus::CAPTURED);
@@ -61,7 +61,7 @@ class PaymentController extends Controller
             $bankCapture = $paymentObj->capture([
                 'authorization_id' => $payment->bank_authorization_id,
                 'amount' => $payment->amount,
-            ], Str::uuid());
+            ], $request->header('Idempotency-Key'));
         } catch (BankRequestException $exception) {
             return $this->bankErrorResponse($exception);
         }
@@ -76,7 +76,7 @@ class PaymentController extends Controller
         ]);
     }
 
-    public function void(PaymentModel $payment): JsonResponse
+    public function void(Request $request, PaymentModel $payment): JsonResponse
     {
         if (! $payment->canTransitionTo(PaymentStatus::VOIDED)) {
             return $this->invalidTransitionResponse($payment, PaymentStatus::VOIDED);
@@ -87,7 +87,7 @@ class PaymentController extends Controller
         try {
             $bankVoid = $paymentObj->void([
                 'authorization_id' => $payment->bank_authorization_id,
-            ], Str::uuid());
+            ], $request->header('Idempotency-Key'));
         } catch (BankRequestException $exception) {
             return $this->bankErrorResponse($exception);
         }
@@ -102,7 +102,7 @@ class PaymentController extends Controller
         ]);
     }
 
-    public function refund(PaymentModel $payment): JsonResponse
+    public function refund(Request $request, PaymentModel $payment): JsonResponse
     {
         if (! $payment->canTransitionTo(PaymentStatus::REFUNDED)) {
             return $this->invalidTransitionResponse($payment, PaymentStatus::REFUNDED);
@@ -114,7 +114,7 @@ class PaymentController extends Controller
             $bankRefund = $paymentObj->refund([
                 'capture_id' => $payment->bank_capture_id,
                 'amount' => $payment->amount,
-            ], Str::uuid());
+            ], $request->header('Idempotency-Key'));
         } catch (BankRequestException $exception) {
             return $this->bankErrorResponse($exception);
         }

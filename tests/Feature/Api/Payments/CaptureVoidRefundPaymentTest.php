@@ -29,7 +29,9 @@ it('captures an authorized payment', function () {
         ], 200),
     ]);
 
-    $this->postJson("/api/v1/payments/{$payment->id}/capture")
+    $this->postJson("/api/v1/payments/{$payment->id}/capture", [], [
+        'Idempotency-Key' => 'idem_capture_'.$payment->id,
+    ])
         ->assertOk()
         ->assertJsonPath('message', 'Payment captured successfully')
         ->assertJsonPath('data.status.value', PaymentStatus::CAPTURED->value);
@@ -53,7 +55,9 @@ it('voids an authorized payment', function () {
         ], 200),
     ]);
 
-    $this->postJson("/api/v1/payments/{$payment->id}/void")
+    $this->postJson("/api/v1/payments/{$payment->id}/void", [], [
+        'Idempotency-Key' => 'idem_void_'.$payment->id,
+    ])
         ->assertOk()
         ->assertJsonPath('data.status.value', PaymentStatus::VOIDED->value);
 
@@ -81,7 +85,9 @@ it('refunds a captured payment', function () {
         ], 200),
     ]);
 
-    $this->postJson("/api/v1/payments/{$payment->id}/refund")
+    $this->postJson("/api/v1/payments/{$payment->id}/refund", [], [
+        'Idempotency-Key' => 'idem_refund_'.$payment->id,
+    ])
         ->assertOk()
         ->assertJsonPath('data.status.value', PaymentStatus::REFUNDED->value);
 
@@ -94,7 +100,9 @@ it('refunds a captured payment', function () {
 it('returns 409 when capturing a voided payment', function () {
     $payment = Payment::factory()->voided()->create();
 
-    $this->postJson("/api/v1/payments/{$payment->id}/capture")
+    $this->postJson("/api/v1/payments/{$payment->id}/capture", [], [
+        'Idempotency-Key' => 'idem_capture_voided_'.$payment->id,
+    ])
         ->assertStatus(409)
         ->assertJsonPath('error', 'invalid_transition');
 
@@ -104,7 +112,9 @@ it('returns 409 when capturing a voided payment', function () {
 it('returns 409 when voiding a captured payment', function () {
     $payment = Payment::factory()->captured()->create();
 
-    $this->postJson("/api/v1/payments/{$payment->id}/void")
+    $this->postJson("/api/v1/payments/{$payment->id}/void", [], [
+        'Idempotency-Key' => 'idem_void_captured_'.$payment->id,
+    ])
         ->assertStatus(409)
         ->assertJsonPath('error', 'invalid_transition');
 

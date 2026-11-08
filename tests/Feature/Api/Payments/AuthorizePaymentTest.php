@@ -4,7 +4,7 @@ use App\Enums\PaymentStatus;
 use App\Models\Payment;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
- 
+
 uses(RefreshDatabase::class);
 
 it('authorizes a payment against the bank', function () {
@@ -27,6 +27,8 @@ it('authorizes a payment against the bank', function () {
         'cvv' => '123',
         'expiry_month' => 12,
         'expiry_year' => 2030,
+    ], [
+        'Idempotency-Key' => 'idem_authorize_ord_100',
     ]);
 
     $response->assertCreated()
@@ -42,6 +44,8 @@ it('authorizes a payment against the bank', function () {
         ->and($payment->status)->toBe(PaymentStatus::AUTHORIZED)
         ->and($payment->bank_authorization_id)->toBe('auth_550e8400-e29b-41d4-a716-446655440000')
         ->and($payment->authorized_at)->not->toBeNull();
+
+    Http::assertSent(fn ($request) => $request->hasHeader('Idempotency-Key', 'idem_authorize_ord_100'));
 });
 
 it('returns the bank error when authorization is declined', function () {
@@ -60,6 +64,8 @@ it('returns the bank error when authorization is declined', function () {
         'cvv' => '789',
         'expiry_month' => 9,
         'expiry_year' => 2030,
+    ], [
+        'Idempotency-Key' => 'idem_authorize_ord_101',
     ]);
 
     $response->assertStatus(402)
@@ -69,7 +75,9 @@ it('returns the bank error when authorization is declined', function () {
 });
 
 it('returns 422 when the payload is invalid', function () {
-    $this->postJson('/api/v1/payments/authorize', [])
+    $this->postJson('/api/v1/payments/authorize', [], [
+        'Idempotency-Key' => 'idem_authorize_invalid',
+    ])
         ->assertUnprocessable()
         ->assertJsonValidationErrors(['order_id', 'customer_id', 'amount', 'card_number', 'cvv', 'expiry_month', 'expiry_year']);
 });
